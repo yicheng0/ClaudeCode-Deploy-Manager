@@ -258,10 +258,12 @@ SKIP_CONFIG=false
 if [ -f "$CONFIG_FILE" ]; then
   OVERWRITE=$(read_input "配置文件已存在，是否覆盖？(Y/n，默认 Y): ")
   OVERWRITE="${OVERWRITE:-Y}"
-  if [[ "$OVERWRITE" =~ ^[Nn]$ ]]; then
-    skip "保留现有配置文件，跳过写入"
-    SKIP_CONFIG=true
-  fi
+  case "$OVERWRITE" in
+    [Nn])
+      skip "保留现有配置文件，跳过写入"
+      SKIP_CONFIG=true
+      ;;
+  esac
 fi
 
 if [ "$SKIP_CONFIG" != "true" ]; then
@@ -298,6 +300,29 @@ EOF
   chmod 600 "$CONFIG_FILE"
   success "配置文件已写入: $CONFIG_FILE"
 fi
+
+# ── 5.5 写入环境变量到 shell RC（Linux 直接读环境变量）────────
+step "配置环境变量"
+
+if [ -n "$ZSH_VERSION" ] || [ "$SHELL" = "/bin/zsh" ]; then
+  ENV_RC="$HOME/.zshrc"
+else
+  ENV_RC="$HOME/.bashrc"
+fi
+
+# 先删除旧的同名变量行（避免重复）
+sed -i '/ANTHROPIC_API_KEY/d' "$ENV_RC"
+sed -i '/ANTHROPIC_BASE_URL/d' "$ENV_RC"
+
+# 写入新值
+echo "export ANTHROPIC_API_KEY=${API_KEY}" >> "$ENV_RC"
+echo "export ANTHROPIC_BASE_URL=${API_BASE_URL}" >> "$ENV_RC"
+
+# 同时在当前 shell 会话生效
+export ANTHROPIC_API_KEY="${API_KEY}"
+export ANTHROPIC_BASE_URL="${API_BASE_URL}"
+
+success "环境变量已写入 ${ENV_RC}，并在当前会话生效"
 
 # ── 6. 完成 ──────────────────────────────────────────────────
 step "完成"
