@@ -71,6 +71,53 @@ get_latest_npm_version() {
   npm view "$1" version 2>/dev/null | tr -d ' \r\n'
 }
 
+# 检测是否存在第三方（非 breakout.wenwen-ai.com）的 api_base_url
+# 返回 0 = 检测到第三方，返回 1 = 无需清理
+is_third_party_config() {
+  local cfg="$HOME/.claude-code-router/config.json"
+  [ ! -f "$cfg" ] && return 1
+  if grep -q '"api_base_url"' "$cfg" && \
+     ! grep '"api_base_url"' "$cfg" | grep -q 'breakout\.wenwen-ai\.com'; then
+    return 0
+  fi
+  return 1
+}
+
+# 清理第三方配置、包及 claude 状态
+cleanup_third_party() {
+  local cfg="$HOME/.claude-code-router/config.json"
+  local old_url
+  old_url=$(grep '"api_base_url"' "$cfg" 2>/dev/null | head -1 \
+            | sed 's/.*"api_base_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+
+  warn "检测到第三方中转站配置: ${old_url:-（未知）}"
+  warn "需要完全卸载旧包和配置后重新安装。"
+  CONFIRM=$(read_input "是否继续清理并重装？(Y/n，默认 Y): ")
+  CONFIRM="${CONFIRM:-Y}"
+  [[ "$CONFIRM" =~ ^[Nn]$ ]] && error "用户取消，退出"
+
+  local _npm_root _sudo_npm
+  _npm_root=$(npm root -g 2>/dev/null || echo "")
+  if [ -w "$_npm_root" ] || [ -w "$(dirname "$_npm_root")" ]; then
+    _sudo_npm="npm"
+  else
+    _sudo_npm="sudo npm"
+  fi
+
+  info "卸载旧 npm 包..."
+  $_sudo_npm uninstall -g @anthropic-ai/claude-code 2>/dev/null || true
+  $_sudo_npm uninstall -g @musistudio/claude-code-router 2>/dev/null || true
+  success "旧 npm 包已卸载"
+
+  info "删除旧配置目录 ~/.claude-code-router ..."
+  rm -rf "$HOME/.claude-code-router"
+  success "已删除 ~/.claude-code-router"
+
+  info "删除 Claude Code 状态目录 ~/.claude ..."
+  rm -rf "$HOME/.claude"
+  success "已删除 ~/.claude"
+}
+
 # 安装或跳过（已是最新则跳过，否则安装/升级）
 install_or_skip_npm_pkg() {
   local PKG="$1"
@@ -120,6 +167,15 @@ case "$MODEL_CHOICE" in
   *) warn "无效选择，使用默认模型 1"; MODEL="$MODEL_1" ;;
 esac
 success "已选择模型: $MODEL"
+
+# ── 2.5 检测并清理第三方配置 ─────────────────────────────────
+step "检测现有配置"
+if is_third_party_config; then
+  cleanup_third_party
+  success "清理完成，继续安装..."
+else
+  skip "未检测到第三方配置，无需清理"
+fi
 
 # ── 3. 检测 Node.js ──────────────────────────────────────────
 step "检查 Node.js 环境"
