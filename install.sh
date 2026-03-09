@@ -76,25 +76,25 @@ get_latest_npm_version() {
 is_third_party_config() {
   local cfg="$HOME/.claude-code-router/config.json"
   [ ! -f "$cfg" ] && return 1
-  if grep -q '"api_base_url"' "$cfg" && \
-     ! grep '"api_base_url"' "$cfg" | grep -q 'breakout\.wenwen-ai\.com'; then
-    return 0
-  fi
-  return 1
+  grep -q '"api_base_url"' "$cfg" || return 1
+  grep '"api_base_url"' "$cfg" | grep -q 'breakout\.wenwen-ai\.com' && return 1
+  return 0
 }
 
-# 清理第三方配置、包及 claude 状态
+# 清理第三方配置、包、环境变量及 claude 状态
 cleanup_third_party() {
   local cfg="$HOME/.claude-code-router/config.json"
   local old_url
   old_url=$(grep '"api_base_url"' "$cfg" 2>/dev/null | head -1 \
-            | sed 's/.*"api_base_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+            | sed 's/.*"api_base_url"[^"]*"\([^"]*\)".*/\1/')
 
   warn "检测到第三方中转站配置: ${old_url:-（未知）}"
   warn "需要完全卸载旧包和配置后重新安装。"
   CONFIRM=$(read_input "是否继续清理并重装？(Y/n，默认 Y): ")
   CONFIRM="${CONFIRM:-Y}"
-  [[ "$CONFIRM" =~ ^[Nn]$ ]] && error "用户取消，退出"
+  case "$CONFIRM" in
+    [Nn]*) error "用户取消，退出" ;;
+  esac
 
   local _npm_root _sudo_npm
   _npm_root=$(npm root -g 2>/dev/null || echo "")
@@ -116,6 +116,17 @@ cleanup_third_party() {
   info "删除 Claude Code 状态目录 ~/.claude ..."
   rm -rf "$HOME/.claude"
   success "已删除 ~/.claude"
+
+  info "清除旧环境变量..."
+  for rc_file in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zshrc"; do
+    if [ -f "$rc_file" ]; then
+      sed -i '/ANTHROPIC_AUTH_TOKEN/d' "$rc_file"
+      sed -i '/ANTHROPIC_API_KEY/d' "$rc_file"
+      sed -i '/ANTHROPIC_BASE_URL/d' "$rc_file"
+    fi
+  done
+  unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_BASE_URL 2>/dev/null || true
+  success "旧环境变量已清除"
 }
 
 # 安装或跳过（已是最新则跳过，否则安装/升级）
