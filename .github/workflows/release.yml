@@ -1,0 +1,153 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    name: Build binaries
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows builds
+          - os: windows-latest
+            target: windows-x64
+            arch: x64
+            binary_name: claudedeploy.exe
+            asset_name: claudedeploy-win-x64
+          
+          # macOS builds (x64 and ARM64)
+          - os: macos-latest
+            target: macos-x64
+            arch: x64
+            binary_name: claudedeploy
+            asset_name: claudedeploy-macos-x64
+          - os: macos-latest
+            target: macos-arm64
+            arch: arm64
+            binary_name: claudedeploy
+            asset_name: claudedeploy-macos-arm64
+          
+          # Linux builds (x64 and ARM64)
+          - os: ubuntu-latest
+            target: linux-x64
+            arch: x64
+            binary_name: claudedeploy
+            asset_name: claudedeploy-linux-x64
+          - os: ubuntu-latest
+            target: linux-arm64
+            arch: arm64
+            binary_name: claudedeploy
+            asset_name: claudedeploy-linux-arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --audit-level=moderate || true
+
+      - name: Install pkg
+        run: npm install -g pkg
+
+      - name: Build binary
+        run: |
+          pkg . --targets node18-${{ matrix.target }} --output dist/${{ matrix.binary_name }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.binary_name }}
+          retention-days: 1
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./binaries
+
+      - name: Display structure of downloaded files
+        run: ls -R ./binaries
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p ./release-assets
+          
+          # Debug: Show exactly what we have
+          echo "=== Available artifacts ==="
+          find ./binaries -type f -name "*" | sort
+          echo "=========================="
+          
+          # Copy and rename binaries with proper platform-specific names
+          # Handle Unix binaries
+          if [ -f "./binaries/claudedeploy-linux-x64/claudedeploy" ]; then
+            cp ./binaries/claudedeploy-linux-x64/claudedeploy ./release-assets/claudedeploy-linux-x64
+          fi
+          
+          if [ -f "./binaries/claudedeploy-linux-arm64/claudedeploy" ]; then
+            cp ./binaries/claudedeploy-linux-arm64/claudedeploy ./release-assets/claudedeploy-linux-arm64
+          fi
+          
+          if [ -f "./binaries/claudedeploy-macos-x64/claudedeploy" ]; then
+            cp ./binaries/claudedeploy-macos-x64/claudedeploy ./release-assets/claudedeploy-macos-x64
+          fi
+          
+          if [ -f "./binaries/claudedeploy-macos-arm64/claudedeploy" ]; then
+            cp ./binaries/claudedeploy-macos-arm64/claudedeploy ./release-assets/claudedeploy-macos-arm64
+          fi
+          
+          # Handle Windows binary (correct path based on asset_name)
+          if [ -f "./binaries/claudedeploy-win-x64/claudedeploy.exe" ]; then
+            cp ./binaries/claudedeploy-win-x64/claudedeploy.exe ./release-assets/claudedeploy-win-x64.exe
+          fi
+          
+          # Make Unix binaries executable
+          chmod +x ./release-assets/claudedeploy-linux-* 2>/dev/null || true
+          chmod +x ./release-assets/claudedeploy-macos-* 2>/dev/null || true
+          
+          # Display final assets
+          echo "=== Final release assets ==="
+          ls -la ./release-assets/
+          echo "==========================="
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./release-assets/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          overwrite: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

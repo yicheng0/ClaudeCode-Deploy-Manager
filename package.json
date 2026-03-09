@@ -1,0 +1,75 @@
+{
+  "name": "claudedeploy",
+  "version": "2.0.5",
+  "description": "一键部署 Claude Code 到服务器 - 支持 SSH 远程安装和本地安装",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mfzzf/ClaudeDeploy.git"
+  },
+  "homepage": "https://github.com/mfzzf/ClaudeDeploy#readme",
+  "bugs": {
+    "url": "https://github.com/mfzzf/ClaudeDeploy/issues"
+  },
+  "main": "src/cli.js",
+  "bin": {
+    "claudedeploy": "./bin/claudedeploy.js",
+    "claude-remote-install": "./bin/claudedeploy.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "node index.js --help",
+    "lint": "eslint . --ext .js",
+    "format": "prettier -w .",
+    "prepack": "npm test",
+    "build": "pkg . --out-path dist/",
+    "build:all": "pkg . --targets node18-win-x64,node18-macos-x64,node18-linux-x64,node18-macos-arm64,node18-linux-arm64 --out-path dist/"
+  },
+  "keywords": [
+    "claude-code",
+    "ssh",
+    "remote-install",
+    "automation",
+    "npm"
+  ],
+  "author": "jason.mei",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "ora": "^5.4.1",
+    "ssh2": "^1.15.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "pkg": "^5.8.1",
+    "prettier": "^3.3.3"
+  },
+  "pkg": {
+    "scripts": [
+      "src/cli.js"
+    ],
+    "assets": [
+      "package.json",
+      "src/**/*",
+      "bin/**/*"
+    ],
+    "targets": [
+      "node18-win-x64",
+      "node18-macos-x64",
+      "node18-linux-x64",
+      "node18-macos-arm64",
+      "node18-linux-arm64"
+    ],
+    "outputPath": "dist"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "README_CN.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
