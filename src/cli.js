@@ -102,7 +102,7 @@ async function askSshAuth() {
 async function runCli() {
   console.log(chalk.bgBlue.white.bold('\n  问问 AI - Claude Code 一键部署脚本  '));
   console.log(chalk.cyan('━'.repeat(50)));
-  console.log(chalk.white('  本脚本由 问问AI (wenwen-ai.com) 提供'));
+  console.log(chalk.white('  本脚本由 问问AI (breakout.wenwen-ai.com) 提供'));
   console.log(chalk.white('  使用专属 API 端点，无需自备 Anthropic 账号'));
   console.log(chalk.white('  支持 SSH 远程部署 和 本地直接安装两种方式'));
   console.log(chalk.cyan('━'.repeat(50)));

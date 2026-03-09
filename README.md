@@ -8,7 +8,7 @@
 
 **问问 AI 专属 Claude Code 一键部署脚本**
 
-**由 [问问AI (wenwen-ai.com)](https://wenwen-ai.com) 提供 · 使用专属 API 端点 · 无需自备 Anthropic 账号**
+**由 [问问AI (breakout.wenwen-ai.com)](https://breakout.wenwen-ai.com) 提供 · 使用专属 API 端点 · 无需自备 Anthropic 账号**
 
 [中文文档](README_CN.md) | [English](README.md)
 
@@ -64,7 +64,7 @@ npx claudedeploy
 ╔══════════════════════════════════════════════════╗
 ║     问问 AI - Claude Code 一键部署脚本           ║
 ╠══════════════════════════════════════════════════╣
-║  本脚本由 问问AI (wenwen-ai.com) 提供            ║
+║  本脚本由 问问AI (breakout.wenwen-ai.com) 提供            ║
 ║  使用专属 API 端点，无需自备 Anthropic 账号      ║
 ╚══════════════════════════════════════════════════╝
 
