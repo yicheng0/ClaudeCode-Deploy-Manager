@@ -7,8 +7,8 @@
 set -e
 
 API_BASE_URL="https://breakout.wenwen-ai.com"
-MODEL_1="claude-sonnet-4-5-20251022"
-MODEL_2="claude-opus-4-5-20251022"
+MODEL_1="claude-sonnet-4-6-20260218"
+MODEL_2="claude-opus-4-6-20260205"
 NODE_MIN_VER="16.0.0"
 
 # ── 颜色 ────────────────────────────────────────────────────

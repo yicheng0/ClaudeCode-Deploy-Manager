@@ -17,8 +17,8 @@ const PROVIDER_NAME = 'openai';
 
 // 默认模型列表
 const DEFAULT_MODELS = [
-  { name: '[REDACTED]', label: '[REDACTED]（推荐，速度快）' },
-  { name: '[REDACTED]', label: '[REDACTED]（更强，较慢）' }
+  { name: 'claude-sonnet-4-6-20260218', label: 'claude-sonnet-4-6-20260218（推荐，速度快）' },
+  { name: 'claude-opus-4-6-20260205', label: 'claude-opus-4-6-20260205（更强，较慢）' }
 ];
 
 /**
