@@ -50,8 +50,12 @@ read_secret() {
   stty -echo 2>/dev/null || true
   read -r -p "$prompt" answer </dev/tty
   stty echo 2>/dev/null || true
-  echo ""
-  echo "$answer"
+  printf '\n' >/dev/tty
+  printf '%s\n' "$answer"
+}
+
+strip_line_breaks() {
+  printf '%s' "$1" | tr -d '\r\n'
 }
 
 # 版本比较：$1 >= $2 返回 true
@@ -122,6 +126,46 @@ get_existing_claude_url() {
   printf '%s\n' "$url"
 }
 
+get_settings_files_to_scan() {
+  printf '%s\n' "$HOME/.claude/settings.json"
+  printf '%s\n' "$HOME/.claude/settings.local.json"
+  if [ "$PWD" != "$HOME" ]; then
+    printf '%s\n' "$PWD/.claude/settings.json"
+    printf '%s\n' "$PWD/.claude/settings.local.json"
+  fi
+  printf '%s\n' "/etc/claude-code/managed-settings.json"
+}
+
+file_has_auth_override_config() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+
+  grep -qE '"apiKeyHelper"|"forceLoginMethod"|"forceLoginOrgUUID"|"oauthAccount"|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_CUSTOM_HEADERS' "$file" 2>/dev/null
+}
+
+get_detected_third_party_reason() {
+  local file
+
+  while IFS= read -r file; do
+    [ -f "$file" ] || continue
+    if file_has_non_official_url "$file" '"api_base_url"|"apiBaseUrl"|ANTHROPIC_BASE_URL'; then
+      printf '检测到第三方 URL 配置: %s\n' "$file"
+      return 0
+    fi
+    if file_has_auth_override_config "$file"; then
+      printf '检测到第三方认证覆盖配置: %s\n' "$file"
+      return 0
+    fi
+  done < <(get_settings_files_to_scan)
+
+  if [ -f "$HOME/.claude/.credentials.json" ]; then
+    printf '检测到已有 Claude 登录凭证: %s\n' "$HOME/.claude/.credentials.json"
+    return 0
+  fi
+
+  return 1
+}
+
 # 获取全局已安装的 npm 包版本（未安装返回空）
 get_installed_npm_version() {
   npm list -g "$1" --depth=0 2>/dev/null \
@@ -151,8 +195,10 @@ is_third_party_config() {
   # 检测 claude-code-router config
   file_has_non_official_url "$HOME/.claude-code-router/config.json" '"api_base_url"' && return 0
   file_has_non_official_url "$HOME/.claude.json" '"apiBaseUrl"' && return 0
-  file_has_non_official_url "$HOME/.claude/settings.json" '"ANTHROPIC_BASE_URL"' && return 0
-  file_has_non_official_url "$HOME/.claude/settings.local.json" '"ANTHROPIC_BASE_URL"' && return 0
+
+  if get_detected_third_party_reason >/dev/null; then
+    return 0
+  fi
 
   # 检测 shell rc 文件中的第三方 URL
   for rc_file in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zshrc"; do
@@ -170,9 +216,12 @@ is_third_party_config() {
 # 清理第三方配置、包、环境变量及 claude 状态
 cleanup_third_party() {
   local old_url
+  local reason
   old_url=$(get_existing_claude_url)
+  reason=$(get_detected_third_party_reason || true)
 
   warn "检测到第三方中转站配置: ${old_url:-（未知）}"
+  [ -n "$reason" ] && warn "$reason"
   warn "将删除旧的 Claude 配置目录和错误 JSON，然后重建。"
   CONFIRM=$(read_input "是否继续清理并重装？(Y/n，默认 Y): ")
   CONFIRM="${CONFIRM:-Y}"
@@ -201,9 +250,23 @@ cleanup_third_party() {
   rm -rf "$HOME/.claude"
   success "已删除 ~/.claude"
 
+  if [ "$PWD" != "$HOME" ] && [ -d "$PWD/.claude" ]; then
+    info "删除当前目录下的共享 Claude 配置 $PWD/.claude ..."
+    rm -rf "$PWD/.claude"
+    success "已删除 $PWD/.claude"
+  fi
+
   info "删除错误的 ~/.claude.json ..."
   rm -f "$HOME/.claude.json"
   success "已删除 ~/.claude.json"
+
+  if [ -f "/etc/claude-code/managed-settings.json" ] && [ -w "/etc/claude-code/managed-settings.json" ]; then
+    info "删除系统级 Claude managed settings ..."
+    rm -f "/etc/claude-code/managed-settings.json"
+    success "已删除 /etc/claude-code/managed-settings.json"
+  elif [ -f "/etc/claude-code/managed-settings.json" ]; then
+    warn "检测到 /etc/claude-code/managed-settings.json，但当前无权限删除；它仍可能覆盖你的配置"
+  fi
 
   info "清除旧环境变量..."
   for rc_file in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zshrc"; do
@@ -244,6 +307,7 @@ install_or_skip_npm_pkg() {
 # ── 1. 询问 API Key ──────────────────────────────────────────
 step "API 配置"
 API_KEY=$(read_secret "请输入 API Key（输入时不显示）: ")
+API_KEY=$(strip_line_breaks "$API_KEY")
 if [ -z "$API_KEY" ]; then
   error "API Key 不能为空"
 fi
@@ -265,6 +329,7 @@ case "$MODEL_CHOICE" in
   3) MODEL=$(read_input "请输入模型名: ") ;;
   *) warn "无效选择，使用默认模型 1"; MODEL="$MODEL_1" ;;
 esac
+MODEL=$(strip_line_breaks "$MODEL")
 success "已选择模型: $MODEL"
 
 # ── 2.5 检测并清理第三方配置 ─────────────────────────────────
@@ -359,7 +424,45 @@ fi
 
 if [ "$SKIP_CONFIG" != "true" ]; then
   DEFAULT_PROVIDER="${PROVIDER_NAME},${MODEL}"
-  cat > "$CONFIG_FILE" <<EOF
+  if command -v python3 &>/dev/null; then
+    python3 - "$CONFIG_FILE" "$PROVIDER_NAME" "$(normalize_base_url "$API_BASE_URL")/v1/messages" "$API_KEY" "$MODEL" "$DEFAULT_PROVIDER" <<'PYEOF'
+import json, sys
+
+path, provider_name, api_base_url, api_key, model, default_provider = sys.argv[1:7]
+
+config = {
+    "LOG": False,
+    "CLAUDE_PATH": "",
+    "HOST": "127.0.0.1",
+    "PORT": 3456,
+    "APIKEY": api_key,
+    "API_TIMEOUT_MS": "600000",
+    "PROXY_URL": "",
+    "Transformers": [],
+    "Providers": [
+        {
+            "name": provider_name,
+            "api_base_url": api_base_url,
+            "api_key": api_key,
+            "models": [model],
+            "transformer": {"use": ["Anthropic"]},
+        }
+    ],
+    "Router": {
+        "default": default_provider,
+        "background": default_provider,
+        "think": default_provider,
+        "longContext": default_provider,
+        "longContextThreshold": 60000,
+        "webSearch": default_provider,
+    },
+}
+
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(config, f, indent=2)
+PYEOF
+  else
+    cat > "$CONFIG_FILE" <<EOF
 {
   "LOG": false,
   "CLAUDE_PATH": "",
@@ -388,7 +491,15 @@ if [ "$SKIP_CONFIG" != "true" ]; then
   }
 }
 EOF
+  fi
   chmod 600 "$CONFIG_FILE"
+  if command -v python3 &>/dev/null; then
+    python3 - "$CONFIG_FILE" <<'PYEOF'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    json.load(f)
+PYEOF
+  fi
   success "配置文件已写入: $CONFIG_FILE"
   GENERATED_URL=$(grep '"api_base_url"' "$CONFIG_FILE" | head -1 | grep -oE "https?://[^\"'[:space:]]+" | head -1 || true)
   info "已读取新配置: ${GENERATED_URL}"
@@ -489,22 +600,6 @@ except Exception:
     pass
 PYEOF
 fi
-# 清除 ~/.claude.json 中的 primaryApiKey（会绕过 ANTHROPIC_BASE_URL 直连 Anthropic，导致 403）
-if [ -f "$HOME/.claude.json" ] && command -v python3 &>/dev/null; then
-  python3 - "$HOME/.claude.json" <<'PYEOF'
-import json, sys
-path = sys.argv[1]
-try:
-    with open(path) as f:
-        d = json.load(f)
-    if d.pop('primaryApiKey', None) is not None:
-        with open(path, 'w') as f:
-            json.dump(d, f, indent=2)
-        print("  [claude.json] 已删除 primaryApiKey（防止绕过代理）")
-except Exception:
-    pass
-PYEOF
-fi
 # 同时在当前会话 unset，防止旧值（来自 RC 文件或 settings.json）干扰新 export
 unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_API_KEY 2>/dev/null || true
 
@@ -556,10 +651,11 @@ if [ ! -f "$CLAUDE_JSON" ]; then
   cat > "$CLAUDE_JSON" <<CLAUDEJSON
 {
   "hasCompletedOnboarding": true,
-  "lastOnboardingVersion": "${CLAUDE_VERSION}"
+  "lastOnboardingVersion": "${CLAUDE_VERSION}",
+  "primaryApiKey": "${API_KEY}"
 }
 CLAUDEJSON
-  success "已创建 ~/.claude.json，跳过登录向导"
+  success "已创建 ~/.claude.json，并写入 primaryApiKey"
 else
   if command -v python3 &>/dev/null; then
     python3 - "$CLAUDE_JSON" "$CLAUDE_VERSION" "$API_KEY" <<'PYEOF'
@@ -569,7 +665,7 @@ with open(path) as f:
     d = json.load(f)
 d['hasCompletedOnboarding'] = True
 d['lastOnboardingVersion'] = ver
-d.pop('primaryApiKey', None)
+d['primaryApiKey'] = api_key
 d.pop('apiBaseUrl', None)
 d.pop('oauthAccount', None)
 d.pop('authToken', None)
@@ -577,15 +673,16 @@ d.pop('sessionToken', None)
 with open(path, 'w') as f:
     json.dump(d, f, indent=2)
 PYEOF
-    success "已更新 ~/.claude.json（hasCompletedOnboarding=true）"
+    success "已更新 ~/.claude.json（已写入 primaryApiKey）"
   else
     cat > "$CLAUDE_JSON" <<CLAUDEJSON
 {
   "hasCompletedOnboarding": true,
-  "lastOnboardingVersion": "${CLAUDE_VERSION}"
+  "lastOnboardingVersion": "${CLAUDE_VERSION}",
+  "primaryApiKey": "${API_KEY}"
 }
 CLAUDEJSON
-    success "已覆盖写入 ~/.claude.json（hasCompletedOnboarding=true）"
+    success "已覆盖写入 ~/.claude.json（已写入 primaryApiKey）"
   fi
 fi
 
@@ -624,6 +721,7 @@ fi
 echo -e "${YELLOW}💡 首次使用提示：${NC}"
 echo "  如果仍弹出登录界面，请检查 ~/.claude.json 是否包含:"
 echo "    \"hasCompletedOnboarding\": true"
+echo "    \"primaryApiKey\": \"***\""
 echo ""
 
 # 诊断总结：打印当前生效的关键环境变量（API Key 脱敏）
