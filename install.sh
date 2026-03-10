@@ -71,22 +71,43 @@ get_latest_npm_version() {
   npm view "$1" version 2>/dev/null | tr -d ' \r\n'
 }
 
-# 检测是否存在第三方（非 breakout.wenwen-ai.com）的 api_base_url
+# 检测是否存在第三方（非 breakout.wenwen-ai.com）的 api_base_url 或 apiBaseUrl
 # 返回 0 = 检测到第三方，返回 1 = 无需清理
 is_third_party_config() {
   local cfg="$HOME/.claude-code-router/config.json"
-  [ ! -f "$cfg" ] && return 1
-  grep -q '"api_base_url"' "$cfg" || return 1
-  grep '"api_base_url"' "$cfg" | grep -q 'breakout\.wenwen-ai\.com' && return 1
-  return 0
+  local claude_json="$HOME/.claude.json"
+
+  # 检测 claude-code-router config
+  if [ -f "$cfg" ]; then
+    if grep -q '"api_base_url"' "$cfg"; then
+      grep '"api_base_url"' "$cfg" | grep -q 'breakout\.wenwen-ai\.com' || return 0
+    fi
+  fi
+
+  # 检测 ~/.claude.json 中的 apiBaseUrl（第三方脚本写入的优先级高于环境变量）
+  if [ -f "$claude_json" ]; then
+    if grep -q '"apiBaseUrl"' "$claude_json"; then
+      grep '"apiBaseUrl"' "$claude_json" | grep -q 'breakout\.wenwen-ai\.com' && return 1
+      grep '"apiBaseUrl"' "$claude_json" | grep -q 'api\.anthropic\.com' && return 1
+      return 0
+    fi
+  fi
+
+  return 1
 }
 
 # 清理第三方配置、包、环境变量及 claude 状态
 cleanup_third_party() {
   local cfg="$HOME/.claude-code-router/config.json"
+  local claude_json="$HOME/.claude.json"
   local old_url
   old_url=$(grep '"api_base_url"' "$cfg" 2>/dev/null | head -1 \
             | sed 's/.*"api_base_url"[^"]*"\([^"]*\)".*/\1/')
+  # 若 ccr config 无 URL，则从 ~/.claude.json 读取
+  if [ -z "$old_url" ] && [ -f "$claude_json" ]; then
+    old_url=$(grep '"apiBaseUrl"' "$claude_json" 2>/dev/null | head -1 \
+              | sed 's/.*"apiBaseUrl"[^"]*"\([^"]*\)".*/\1/')
+  fi
 
   warn "检测到第三方中转站配置: ${old_url:-（未知）}"
   warn "需要完全卸载旧包和配置后重新安装。"
@@ -116,6 +137,25 @@ cleanup_third_party() {
   info "删除 Claude Code 状态目录 ~/.claude ..."
   rm -rf "$HOME/.claude"
   success "已删除 ~/.claude"
+
+  # 清除 ~/.claude.json 中的第三方 apiBaseUrl 和 oauthAccount（优先级高于环境变量）
+  if [ -f "$HOME/.claude.json" ] && command -v python3 &>/dev/null; then
+    info "清除 ~/.claude.json 中的第三方 URL 配置..."
+    python3 - "$HOME/.claude.json" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        d = json.load(f)
+    d.pop('apiBaseUrl', None)
+    d.pop('oauthAccount', None)
+    with open(path, 'w') as f:
+        json.dump(d, f, indent=2)
+except Exception:
+    pass
+PYEOF
+    success "已清除 ~/.claude.json 中的第三方 URL 配置"
+  fi
 
   info "清除旧环境变量..."
   for rc_file in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zshrc"; do
@@ -348,6 +388,8 @@ with open(path) as f:
     d = json.load(f)
 d['hasCompletedOnboarding'] = True
 d['lastOnboardingVersion'] = ver
+d.pop('apiBaseUrl', None)
+d.pop('oauthAccount', None)
 with open(path, 'w') as f:
     json.dump(d, f, indent=2)
 PYEOF
