@@ -436,6 +436,22 @@ except Exception:
     pass
 PYEOF
 fi
+# 清除 ~/.claude.json 中的 primaryApiKey（会绕过 ANTHROPIC_BASE_URL 直连 Anthropic，导致 403）
+if [ -f "$HOME/.claude.json" ] && command -v python3 &>/dev/null; then
+  python3 - "$HOME/.claude.json" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        d = json.load(f)
+    if d.pop('primaryApiKey', None) is not None:
+        with open(path, 'w') as f:
+            json.dump(d, f, indent=2)
+        print("  [claude.json] 已删除 primaryApiKey（防止绕过代理）")
+except Exception:
+    pass
+PYEOF
+fi
 # 同时在当前会话 unset，防止旧值（来自 RC 文件或 settings.json）干扰新 export
 unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_API_KEY 2>/dev/null || true
 
@@ -459,8 +475,7 @@ if [ ! -f "$CLAUDE_JSON" ]; then
   cat > "$CLAUDE_JSON" <<CLAUDEJSON
 {
   "hasCompletedOnboarding": true,
-  "lastOnboardingVersion": "${CLAUDE_VERSION}",
-  "primaryApiKey": "${API_KEY}"
+  "lastOnboardingVersion": "${CLAUDE_VERSION}"
 }
 CLAUDEJSON
   success "已创建 ~/.claude.json，跳过登录向导"
@@ -473,7 +488,7 @@ with open(path) as f:
     d = json.load(f)
 d['hasCompletedOnboarding'] = True
 d['lastOnboardingVersion'] = ver
-d['primaryApiKey'] = api_key
+d.pop('primaryApiKey', None)
 d.pop('apiBaseUrl', None)
 d.pop('oauthAccount', None)
 d.pop('authToken', None)
@@ -486,8 +501,7 @@ PYEOF
     cat > "$CLAUDE_JSON" <<CLAUDEJSON
 {
   "hasCompletedOnboarding": true,
-  "lastOnboardingVersion": "${CLAUDE_VERSION}",
-  "primaryApiKey": "${API_KEY}"
+  "lastOnboardingVersion": "${CLAUDE_VERSION}"
 }
 CLAUDEJSON
     success "已覆盖写入 ~/.claude.json（hasCompletedOnboarding=true）"
