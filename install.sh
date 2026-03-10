@@ -410,8 +410,34 @@ PYEOF
 elif [ -f "$CLAUDE_SETTINGS" ]; then
   warn "~/.claude/settings.json 存在但 python3 不可用，跳过清理（可能存在残留配置）"
 fi
-# 同时在当前会话 unset，防止 settings.json 中的值已经被注入当前 session
-unset ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
+
+# 同样清理 settings.local.json（Claude Code 也会读取此文件）
+CLAUDE_SETTINGS_LOCAL="$HOME/.claude/settings.local.json"
+if [ -f "$CLAUDE_SETTINGS_LOCAL" ] && command -v python3 &>/dev/null; then
+  python3 - "$CLAUDE_SETTINGS_LOCAL" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        d = json.load(f)
+    env = d.get('env', {})
+    removed = [k for k in ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY'] if k in env]
+    for k in removed:
+        env.pop(k)
+    if env:
+        d['env'] = env
+    elif 'env' in d:
+        del d['env']
+    with open(path, 'w') as f:
+        json.dump(d, f, indent=2)
+    if removed:
+        print(f"  [settings.local.json] 已移除: {', '.join(removed)}")
+except Exception:
+    pass
+PYEOF
+fi
+# 同时在当前会话 unset，防止旧值（来自 RC 文件或 settings.json）干扰新 export
+unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_API_KEY 2>/dev/null || true
 
 # 写入新值（用引号包裹 key 值，防止特殊字符导致 bash 解析错误）
 echo "export ANTHROPIC_API_KEY=\"${API_KEY}\"" >> "$ENV_RC"
