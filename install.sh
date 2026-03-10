@@ -350,10 +350,14 @@ else
   ENV_RC="$HOME/.bashrc"
 fi
 
-# 先删除旧的同名变量行（避免重复），包括旧版 ANTHROPIC_AUTH_TOKEN
-sed -i '/ANTHROPIC_AUTH_TOKEN/d' "$ENV_RC"
-sed -i '/ANTHROPIC_API_KEY/d' "$ENV_RC"
-sed -i '/ANTHROPIC_BASE_URL/d' "$ENV_RC"
+# 先从所有 RC 文件删除旧的同名变量行（避免重复，覆盖所有可能的写入位置）
+for _rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zshrc"; do
+  if [ -f "$_rc" ]; then
+    sed -i '/ANTHROPIC_AUTH_TOKEN/d' "$_rc"
+    sed -i '/ANTHROPIC_API_KEY/d' "$_rc"
+    sed -i '/ANTHROPIC_BASE_URL/d' "$_rc"
+  fi
+done
 
 # 写入新值（用引号包裹 key 值，防止特殊字符导致 bash 解析错误）
 echo "export ANTHROPIC_API_KEY=\"${API_KEY}\"" >> "$ENV_RC"
