@@ -353,15 +353,20 @@ fi
 # 先从所有 RC 文件删除旧的同名变量行（避免重复，覆盖所有可能的写入位置）
 for _rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zshrc"; do
   if [ -f "$_rc" ]; then
-    sed -i '/ANTHROPIC_AUTH_TOKEN/d' "$_rc"
-    sed -i '/ANTHROPIC_API_KEY/d' "$_rc"
-    sed -i '/ANTHROPIC_BASE_URL/d' "$_rc"
+    if grep -qE 'ANTHROPIC_AUTH_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_BASE_URL' "$_rc" 2>/dev/null; then
+      info "在 $_rc 中发现旧 ANTHROPIC 环境变量，正在清除..."
+      sed -i '/ANTHROPIC_AUTH_TOKEN/d' "$_rc"
+      sed -i '/ANTHROPIC_API_KEY/d' "$_rc"
+      sed -i '/ANTHROPIC_BASE_URL/d' "$_rc"
+      success "已清除 $_rc 中的旧变量"
+    fi
   fi
 done
 
 # 清理 ~/.claude/settings.json 中的第三方 env 配置（优先级高于 shell 环境变量）
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 if [ -f "$CLAUDE_SETTINGS" ] && command -v python3 &>/dev/null; then
+  info "正在清理 ~/.claude/settings.json 中的第三方配置..."
   python3 - "$CLAUDE_SETTINGS" <<'PYEOF'
 import json, sys
 path = sys.argv[1]
@@ -369,6 +374,7 @@ try:
     with open(path) as f:
         d = json.load(f)
     env = d.get('env', {})
+    removed_env = [k for k in ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY'] if k in env]
     env.pop('ANTHROPIC_AUTH_TOKEN', None)
     env.pop('ANTHROPIC_BASE_URL', None)
     env.pop('ANTHROPIC_API_KEY', None)
@@ -376,11 +382,24 @@ try:
         d['env'] = env
     elif 'env' in d:
         del d['env']
+    # 同时清理顶层认证字段
+    removed_top = [k for k in ['apiKey', 'authToken', 'sessionToken'] if k in d]
+    d.pop('apiKey', None)
+    d.pop('authToken', None)
+    d.pop('sessionToken', None)
     with open(path, 'w') as f:
         json.dump(d, f, indent=2)
-except Exception:
-    pass
+    if removed_env:
+        print(f"  [settings.json] 已从 env 块移除: {', '.join(removed_env)}")
+    if removed_top:
+        print(f"  [settings.json] 已从顶层移除: {', '.join(removed_top)}")
+    if not removed_env and not removed_top:
+        print("  [settings.json] 无第三方配置，无需清理")
+except Exception as e:
+    print(f"  [settings.json] 解析失败: {e}")
 PYEOF
+elif [ -f "$CLAUDE_SETTINGS" ]; then
+  warn "~/.claude/settings.json 存在但 python3 不可用，跳过清理（可能存在残留配置）"
 fi
 # 同时在当前会话 unset，防止 settings.json 中的值已经被注入当前 session
 unset ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
@@ -422,6 +441,8 @@ d['lastOnboardingVersion'] = ver
 d['primaryApiKey'] = api_key
 d.pop('apiBaseUrl', None)
 d.pop('oauthAccount', None)
+d.pop('authToken', None)
+d.pop('sessionToken', None)
 with open(path, 'w') as f:
     json.dump(d, f, indent=2)
 PYEOF
@@ -466,4 +487,18 @@ fi
 echo -e "${YELLOW}💡 首次使用提示：${NC}"
 echo "  如果仍弹出登录界面，请检查 ~/.claude.json 是否包含:"
 echo "    \"hasCompletedOnboarding\": true"
+echo ""
+
+# 诊断总结：打印当前生效的关键环境变量（API Key 脱敏）
+echo -e "${CYAN}${BOLD}── 当前环境变量诊断 ────────────────────────────────${NC}"
+_key_display="${ANTHROPIC_API_KEY:0:10}..."
+_token_display="${ANTHROPIC_AUTH_TOKEN:-(未设置，正常)}"
+echo "  ANTHROPIC_API_KEY  : ${_key_display}"
+echo "  ANTHROPIC_BASE_URL : ${ANTHROPIC_BASE_URL}"
+echo "  ANTHROPIC_AUTH_TOKEN: ${_token_display}"
+if [ -n "$ANTHROPIC_AUTH_TOKEN" ]; then
+  warn "ANTHROPIC_AUTH_TOKEN 仍然存在！请检查 ~/.claude/settings.json 或 RC 文件是否有残留"
+else
+  success "无 Auth Token 冲突，Claude Code 将使用 ANTHROPIC_API_KEY"
+fi
 echo ""
