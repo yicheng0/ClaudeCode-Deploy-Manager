@@ -375,19 +375,21 @@ if [ ! -f "$CLAUDE_JSON" ]; then
   cat > "$CLAUDE_JSON" <<CLAUDEJSON
 {
   "hasCompletedOnboarding": true,
-  "lastOnboardingVersion": "${CLAUDE_VERSION}"
+  "lastOnboardingVersion": "${CLAUDE_VERSION}",
+  "primaryApiKey": "${API_KEY}"
 }
 CLAUDEJSON
   success "已创建 ~/.claude.json，跳过登录向导"
 else
   if command -v python3 &>/dev/null; then
-    python3 - "$CLAUDE_JSON" "$CLAUDE_VERSION" <<'PYEOF'
+    python3 - "$CLAUDE_JSON" "$CLAUDE_VERSION" "$API_KEY" <<'PYEOF'
 import json, sys
-path, ver = sys.argv[1], sys.argv[2]
+path, ver, api_key = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(path) as f:
     d = json.load(f)
 d['hasCompletedOnboarding'] = True
 d['lastOnboardingVersion'] = ver
+d['primaryApiKey'] = api_key
 d.pop('apiBaseUrl', None)
 d.pop('oauthAccount', None)
 with open(path, 'w') as f:
@@ -398,7 +400,8 @@ PYEOF
     cat > "$CLAUDE_JSON" <<CLAUDEJSON
 {
   "hasCompletedOnboarding": true,
-  "lastOnboardingVersion": "${CLAUDE_VERSION}"
+  "lastOnboardingVersion": "${CLAUDE_VERSION}",
+  "primaryApiKey": "${API_KEY}"
 }
 CLAUDEJSON
     success "已覆盖写入 ~/.claude.json（hasCompletedOnboarding=true）"
