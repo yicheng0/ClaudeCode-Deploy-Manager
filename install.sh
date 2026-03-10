@@ -363,6 +363,15 @@ for _rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zshrc"
   fi
 done
 
+# 清除 OAuth 登录凭证（~/.claude/.credentials.json 存储 accessToken，Claude Code 启动时读取，
+# 优先级高于 ANTHROPIC_API_KEY，导致 "Auth conflict: /login managed key" 错误）
+CLAUDE_CREDS="$HOME/.claude/.credentials.json"
+if [ -f "$CLAUDE_CREDS" ]; then
+  info "发现 OAuth 登录凭证 ~/.claude/.credentials.json，正在删除..."
+  rm -f "$CLAUDE_CREDS"
+  success "已删除 OAuth 登录凭证，将使用 ANTHROPIC_API_KEY"
+fi
+
 # 清理 ~/.claude/settings.json 中的第三方 env 配置（优先级高于 shell 环境变量）
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 if [ -f "$CLAUDE_SETTINGS" ] && command -v python3 &>/dev/null; then
