@@ -325,6 +325,44 @@ export ANTHROPIC_BASE_URL="${API_BASE_URL}"
 
 success "环境变量已写入 ${ENV_RC}，并在当前会话生效"
 
+# ── 5.6 写入 ~/.claude.json 跳过 Onboarding 登录向导 ─────────
+step "初始化 Claude Code 状态"
+
+CLAUDE_JSON="$HOME/.claude.json"
+CLAUDE_VERSION=$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "2.1.0")
+
+if [ ! -f "$CLAUDE_JSON" ]; then
+  cat > "$CLAUDE_JSON" <<CLAUDEJSON
+{
+  "hasCompletedOnboarding": true,
+  "lastOnboardingVersion": "${CLAUDE_VERSION}"
+}
+CLAUDEJSON
+  success "已创建 ~/.claude.json，跳过登录向导"
+else
+  if command -v python3 &>/dev/null; then
+    python3 - "$CLAUDE_JSON" "$CLAUDE_VERSION" <<'PYEOF'
+import json, sys
+path, ver = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    d = json.load(f)
+d['hasCompletedOnboarding'] = True
+d['lastOnboardingVersion'] = ver
+with open(path, 'w') as f:
+    json.dump(d, f, indent=2)
+PYEOF
+    success "已更新 ~/.claude.json（hasCompletedOnboarding=true）"
+  else
+    cat > "$CLAUDE_JSON" <<CLAUDEJSON
+{
+  "hasCompletedOnboarding": true,
+  "lastOnboardingVersion": "${CLAUDE_VERSION}"
+}
+CLAUDEJSON
+    success "已覆盖写入 ~/.claude.json（hasCompletedOnboarding=true）"
+  fi
+fi
+
 # ── 6. 完成 ──────────────────────────────────────────────────
 step "完成"
 
@@ -352,7 +390,6 @@ if [ -n "$GLOBAL_BIN" ] && [[ ":$PATH:" != *":$GLOBAL_BIN:"* ]]; then
 fi
 
 echo -e "${YELLOW}💡 首次使用提示：${NC}"
-echo "  如果 ccr code 停在 Claude 登录界面，先运行一次:"
-echo "  ANTHROPIC_AUTH_TOKEN=token claude"
-echo "  然后退出，再运行 ccr code 即可"
+echo "  如果仍弹出登录界面，请检查 ~/.claude.json 是否包含:"
+echo "    \"hasCompletedOnboarding\": true"
 echo ""
