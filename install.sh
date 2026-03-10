@@ -359,6 +359,32 @@ for _rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zshrc"
   fi
 done
 
+# 清理 ~/.claude/settings.json 中的第三方 env 配置（优先级高于 shell 环境变量）
+CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+if [ -f "$CLAUDE_SETTINGS" ] && command -v python3 &>/dev/null; then
+  python3 - "$CLAUDE_SETTINGS" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        d = json.load(f)
+    env = d.get('env', {})
+    env.pop('ANTHROPIC_AUTH_TOKEN', None)
+    env.pop('ANTHROPIC_BASE_URL', None)
+    env.pop('ANTHROPIC_API_KEY', None)
+    if env:
+        d['env'] = env
+    elif 'env' in d:
+        del d['env']
+    with open(path, 'w') as f:
+        json.dump(d, f, indent=2)
+except Exception:
+    pass
+PYEOF
+fi
+# 同时在当前会话 unset，防止 settings.json 中的值已经被注入当前 session
+unset ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
+
 # 写入新值（用引号包裹 key 值，防止特殊字符导致 bash 解析错误）
 echo "export ANTHROPIC_API_KEY=\"${API_KEY}\"" >> "$ENV_RC"
 echo "export ANTHROPIC_BASE_URL=\"${API_BASE_URL}\"" >> "$ENV_RC"
