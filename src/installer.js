@@ -6,7 +6,7 @@ const ora = require('ora');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { validateRegistryUrl } = require('./utils');
+const { validateRegistryUrl, normalizeApiBaseUrl, buildAnthropicMessagesUrl } = require('./utils');
 
 class ClaudeRemoteInstaller {
   constructor(options = {}) {
@@ -246,6 +246,7 @@ class ClaudeRemoteInstaller {
     const remoteHome = await this.getRemoteHome(username);
     const remoteDir = `${remoteHome}/.claude-code-router`;
     const configPath = `${remoteDir}/config.json`;
+    const expectedBaseUrl = normalizeApiBaseUrl('https://breakout.wenwen-ai.com');
     this.spinner = ora('Generating config on remote server...').start();
     try {
       const allProviders = [];
@@ -254,10 +255,16 @@ class ClaudeRemoteInstaller {
       for (const provider of providers) {
         // models are always explicitly provided by the caller
         const models = provider.models || [];
+        const normalizedApiUrl = normalizeApiBaseUrl(provider.apiUrl);
+        const anthropicMessagesUrl = buildAnthropicMessagesUrl(provider.apiUrl);
+
+        if (!normalizedApiUrl || !anthropicMessagesUrl) {
+          throw new Error(`Invalid provider apiUrl: ${provider.apiUrl || '(empty)'}`);
+        }
 
         allProviders.push({
           name: provider.name,
-          api_base_url: `${provider.apiUrl}/v1/messages`,
+          api_base_url: anthropicMessagesUrl,
           api_key: provider.apiKey,
           models: models,
           transformer: { use: ['Anthropic'] }
@@ -291,6 +298,26 @@ class ClaudeRemoteInstaller {
         Router,
       };
 
+      try {
+        const existingContent = await this.executeCommand(
+          `sh -lc "cat '${configPath}' 2>/dev/null || true"`,
+          'Reading existing remote config'
+        );
+        if (existingContent.trim()) {
+          const existing = JSON.parse(existingContent);
+          const existingUrl = existing?.Providers?.[0]?.api_base_url || '';
+          const existingBaseUrl = normalizeApiBaseUrl(existingUrl);
+          if (existingBaseUrl && existingBaseUrl !== expectedBaseUrl) {
+            await this.executeCommand(
+              `rm -rf '${remoteHome}/.claude-code-router' '${remoteHome}/.claude' && rm -f '${remoteHome}/.claude.json'`,
+              'Removing mismatched Claude config on remote server'
+            );
+          }
+        }
+      } catch (_) {
+        // Ignore unreadable existing config and rebuild from scratch.
+      }
+
       await new Promise((resolve, reject) => {
         this.conn.exec(`mkdir -p ${remoteDir} && chmod 700 ${remoteDir}`, (mkErr) => {
           if (mkErr) return reject(mkErr);
@@ -303,6 +330,14 @@ class ClaudeRemoteInstaller {
           });
         });
       });
+
+      const verified = JSON.parse(
+        await this.executeCommand(`sh -lc "cat '${configPath}'"`, 'Reading generated remote config')
+      );
+      const savedUrl = verified?.Providers?.[0]?.api_base_url || '';
+      if (savedUrl !== buildAnthropicMessagesUrl(expectedBaseUrl)) {
+        throw new Error(`Generated remote config verification failed: ${savedUrl}`);
+      }
 
       this.spinner.succeed('Config generated on remote server');
       console.log(chalk.green(`✅ Config file created at: ${configPath}`));
@@ -384,4 +419,3 @@ class ClaudeRemoteInstaller {
 }
 
 module.exports = { ClaudeRemoteInstaller };
-

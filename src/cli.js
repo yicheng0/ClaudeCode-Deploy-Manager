@@ -13,7 +13,7 @@ const packageJson = require('../package.json');
 //   登录到服务器的场景，直接在当前机器上执行安装
 
 const API_BASE_URL = 'https://breakout.wenwen-ai.com';
-const PROVIDER_NAME = 'openai';
+const PROVIDER_NAME = 'anthropic';
 
 // 默认模型列表
 const DEFAULT_MODELS = [
@@ -181,7 +181,7 @@ async function runCli() {
     }
 
     console.log(chalk.gray('\n如遇到 "command not found"，请确保 PATH 包含全局 npm 二进制目录：'));
-    console.log(chalk.gray('  echo "export PATH=$(npm bin -g):$PATH" >> ~/.bashrc && source ~/.bashrc'));
+    console.log(chalk.gray('  echo "export PATH=$(npm prefix -g)/bin:$PATH" >> ~/.bashrc && source ~/.bashrc'));
   } catch (error) {
     console.error(chalk.red('\n❌ 安装失败:'), error.message);
     process.exit(1);

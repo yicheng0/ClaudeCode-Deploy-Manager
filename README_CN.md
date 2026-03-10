@@ -113,7 +113,7 @@ ANTHROPIC_AUTH_TOKEN=token claude
 如遇 `command not found`：
 
 ```bash
-echo "export PATH=$(npm bin -g):\$PATH" >> ~/.bashrc && source ~/.bashrc
+echo "export PATH=$(npm prefix -g)/bin:\$PATH" >> ~/.bashrc && source ~/.bashrc
 ```
 
 ## 🖥️ 支持平台

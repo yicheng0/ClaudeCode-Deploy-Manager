@@ -5,7 +5,7 @@ const ora = require('ora');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { validateRegistryUrl } = require('./utils');
+const { validateRegistryUrl, normalizeApiBaseUrl, buildAnthropicMessagesUrl } = require('./utils');
 
 class LocalInstaller {
   constructor(options = {}) {
@@ -151,6 +151,7 @@ class LocalInstaller {
   async generateMultiProviderConfig(providers, preferredModel = null) {
     const configDir = path.join(os.homedir(), '.claude-code-router');
     const configPath = path.join(configDir, 'config.json');
+    const expectedBaseUrl = normalizeApiBaseUrl('https://breakout.wenwen-ai.com');
 
     if (!providers || providers.length === 0) {
       throw new Error('No providers specified');
@@ -166,10 +167,16 @@ class LocalInstaller {
       for (const provider of providers) {
         // models are always explicitly provided by the caller
         const models = provider.models || [];
+        const normalizedApiUrl = normalizeApiBaseUrl(provider.apiUrl);
+        const anthropicMessagesUrl = buildAnthropicMessagesUrl(provider.apiUrl);
+
+        if (!normalizedApiUrl || !anthropicMessagesUrl) {
+          throw new Error(`Invalid provider apiUrl: ${provider.apiUrl || '(empty)'}`);
+        }
 
         allProviders.push({
           name: provider.name,
-          api_base_url: `${provider.apiUrl}/v1/messages`,
+          api_base_url: anthropicMessagesUrl,
           api_key: provider.apiKey,
           models: models,
           transformer: { use: ['Anthropic'] }
@@ -206,8 +213,31 @@ class LocalInstaller {
         Router,
       };
 
+      if (fs.existsSync(configPath)) {
+        try {
+          const existing = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+          const existingUrl = existing?.Providers?.[0]?.api_base_url || '';
+          const existingBaseUrl = normalizeApiBaseUrl(existingUrl);
+          if (existingBaseUrl && existingBaseUrl !== expectedBaseUrl) {
+            console.log(chalk.yellow(`⚠️  Found mismatched config URL: ${existingUrl}`));
+            console.log(chalk.yellow('🧹 Removing old Claude config before rebuilding...'));
+            fs.rmSync(configDir, { recursive: true, force: true });
+            fs.rmSync(path.join(os.homedir(), '.claude'), { recursive: true, force: true });
+            fs.rmSync(path.join(os.homedir(), '.claude.json'), { force: true });
+            fs.mkdirSync(configDir, { recursive: true });
+          }
+        } catch (_) {
+          fs.rmSync(configPath, { force: true });
+        }
+      }
+
       if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+      const savedConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      const savedUrl = savedConfig?.Providers?.[0]?.api_base_url || '';
+      if (savedUrl !== buildAnthropicMessagesUrl(expectedBaseUrl)) {
+        throw new Error(`Generated config verification failed: ${savedUrl}`);
+      }
       console.log(chalk.green(`✅ Config generated at: ${configPath}`));
       this.logger('success', `✅ Config generated at: ${configPath}`);
     } catch (error) {
@@ -219,4 +249,3 @@ class LocalInstaller {
 }
 
 module.exports = { LocalInstaller };
-

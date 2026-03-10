@@ -10,6 +10,7 @@ API_BASE_URL="https://breakout.wenwen-ai.com"
 MODEL_1="claude-sonnet-4-6-20260218"
 MODEL_2="claude-opus-4-6-20260205"
 NODE_MIN_VER="16.0.0"
+PROVIDER_NAME="anthropic"
 
 # ── 颜色 ────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -58,6 +59,69 @@ version_gte() {
   [ "$(printf '%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]
 }
 
+is_official_base_url() {
+  local url
+  url=$(normalize_base_url "$1")
+  [ "$url" = "$(normalize_base_url "$API_BASE_URL")" ] || [ "$url" = "https://api.anthropic.com" ]
+}
+
+normalize_base_url() {
+  local url="$1"
+  url="${url%%\?*}"
+  url="${url%%\#*}"
+  url="${url%/}"
+  url="${url%/v1/messages}"
+  url="${url%/v1}"
+  printf '%s\n' "${url%/}"
+}
+
+file_has_non_official_url() {
+  local file="$1"
+  local pattern="$2"
+  local line url
+
+  [ -f "$file" ] || return 1
+
+  while IFS= read -r line; do
+    url=$(printf '%s\n' "$line" | grep -oE "https?://[^\"'[:space:]]+" | head -1)
+    [ -z "$url" ] && continue
+    is_official_base_url "$url" || return 0
+  done < <(grep -E "$pattern" "$file" 2>/dev/null || true)
+
+  return 1
+}
+
+get_npm_global_bin() {
+  local prefix
+  prefix=$(npm prefix -g 2>/dev/null || true)
+  if [ -n "$prefix" ]; then
+    printf '%s/bin\n' "$prefix"
+  fi
+}
+
+get_existing_claude_url() {
+  local cfg="$HOME/.claude-code-router/config.json"
+  local claude_json="$HOME/.claude.json"
+  local claude_settings="$HOME/.claude/settings.json"
+  local claude_settings_local="$HOME/.claude/settings.local.json"
+  local url=""
+
+  if [ -f "$cfg" ]; then
+    url=$(grep '"api_base_url"' "$cfg" 2>/dev/null | head -1 | grep -oE "https?://[^\"'[:space:]]+" | head -1 || true)
+  fi
+  if [ -z "$url" ] && [ -f "$claude_json" ]; then
+    url=$(grep '"apiBaseUrl"' "$claude_json" 2>/dev/null | head -1 | grep -oE "https?://[^\"'[:space:]]+" | head -1 || true)
+  fi
+  if [ -z "$url" ] && [ -f "$claude_settings" ]; then
+    url=$(grep 'ANTHROPIC_BASE_URL' "$claude_settings" 2>/dev/null | head -1 | grep -oE "https?://[^\"'[:space:]]+" | head -1 || true)
+  fi
+  if [ -z "$url" ] && [ -f "$claude_settings_local" ]; then
+    url=$(grep 'ANTHROPIC_BASE_URL' "$claude_settings_local" 2>/dev/null | head -1 | grep -oE "https?://[^\"'[:space:]]+" | head -1 || true)
+  fi
+
+  printf '%s\n' "$url"
+}
+
 # 获取全局已安装的 npm 包版本（未安装返回空）
 get_installed_npm_version() {
   npm list -g "$1" --depth=0 2>/dev/null \
@@ -74,23 +138,30 @@ get_latest_npm_version() {
 # 检测是否存在第三方（非 breakout.wenwen-ai.com）的 api_base_url 或 apiBaseUrl
 # 返回 0 = 检测到第三方，返回 1 = 无需清理
 is_third_party_config() {
-  local cfg="$HOME/.claude-code-router/config.json"
-  local claude_json="$HOME/.claude.json"
+  local existing_url existing_base
+  local rc_file
 
-  # 检测 claude-code-router config
-  if [ -f "$cfg" ]; then
-    if grep -q '"api_base_url"' "$cfg"; then
-      grep '"api_base_url"' "$cfg" | grep -q 'breakout\.wenwen-ai\.com' || return 0
-    fi
+  existing_url=$(get_existing_claude_url)
+  existing_base=$(normalize_base_url "$existing_url")
+
+  if [ -n "$existing_base" ] && [ "$existing_base" != "$(normalize_base_url "$API_BASE_URL")" ]; then
+    return 0
   fi
 
-  # 检测 ~/.claude.json 中的 apiBaseUrl（第三方脚本写入的优先级高于环境变量）
-  if [ -f "$claude_json" ]; then
-    if grep -q '"apiBaseUrl"' "$claude_json"; then
-      grep '"apiBaseUrl"' "$claude_json" | grep -q 'breakout\.wenwen-ai\.com' && return 1
-      grep '"apiBaseUrl"' "$claude_json" | grep -q 'api\.anthropic\.com' && return 1
-      return 0
-    fi
+  # 检测 claude-code-router config
+  file_has_non_official_url "$HOME/.claude-code-router/config.json" '"api_base_url"' && return 0
+  file_has_non_official_url "$HOME/.claude.json" '"apiBaseUrl"' && return 0
+  file_has_non_official_url "$HOME/.claude/settings.json" '"ANTHROPIC_BASE_URL"' && return 0
+  file_has_non_official_url "$HOME/.claude/settings.local.json" '"ANTHROPIC_BASE_URL"' && return 0
+
+  # 检测 shell rc 文件中的第三方 URL
+  for rc_file in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zshrc"; do
+    file_has_non_official_url "$rc_file" 'ANTHROPIC_BASE_URL' && return 0
+  done
+
+  # 检测当前会话里的第三方 URL
+  if [ -n "$ANTHROPIC_BASE_URL" ] && ! is_official_base_url "$ANTHROPIC_BASE_URL"; then
+    return 0
   fi
 
   return 1
@@ -98,19 +169,11 @@ is_third_party_config() {
 
 # 清理第三方配置、包、环境变量及 claude 状态
 cleanup_third_party() {
-  local cfg="$HOME/.claude-code-router/config.json"
-  local claude_json="$HOME/.claude.json"
   local old_url
-  old_url=$(grep '"api_base_url"' "$cfg" 2>/dev/null | head -1 \
-            | sed 's/.*"api_base_url"[^"]*"\([^"]*\)".*/\1/')
-  # 若 ccr config 无 URL，则从 ~/.claude.json 读取
-  if [ -z "$old_url" ] && [ -f "$claude_json" ]; then
-    old_url=$(grep '"apiBaseUrl"' "$claude_json" 2>/dev/null | head -1 \
-              | sed 's/.*"apiBaseUrl"[^"]*"\([^"]*\)".*/\1/')
-  fi
+  old_url=$(get_existing_claude_url)
 
   warn "检测到第三方中转站配置: ${old_url:-（未知）}"
-  warn "需要完全卸载旧包和配置后重新安装。"
+  warn "将删除旧的 Claude 配置目录和错误 JSON，然后重建。"
   CONFIRM=$(read_input "是否继续清理并重装？(Y/n，默认 Y): ")
   CONFIRM="${CONFIRM:-Y}"
   case "$CONFIRM" in
@@ -134,28 +197,13 @@ cleanup_third_party() {
   rm -rf "$HOME/.claude-code-router"
   success "已删除 ~/.claude-code-router"
 
-  info "删除 Claude Code 状态目录 ~/.claude ..."
+  info "删除 Claude 配置目录 ~/.claude ..."
   rm -rf "$HOME/.claude"
   success "已删除 ~/.claude"
 
-  # 清除 ~/.claude.json 中的第三方 apiBaseUrl 和 oauthAccount（优先级高于环境变量）
-  if [ -f "$HOME/.claude.json" ] && command -v python3 &>/dev/null; then
-    info "清除 ~/.claude.json 中的第三方 URL 配置..."
-    python3 - "$HOME/.claude.json" <<'PYEOF'
-import json, sys
-path = sys.argv[1]
-try:
-    with open(path) as f:
-        d = json.load(f)
-    d.pop('apiBaseUrl', None)
-    d.pop('oauthAccount', None)
-    with open(path, 'w') as f:
-        json.dump(d, f, indent=2)
-except Exception:
-    pass
-PYEOF
-    success "已清除 ~/.claude.json 中的第三方 URL 配置"
-  fi
+  info "删除错误的 ~/.claude.json ..."
+  rm -f "$HOME/.claude.json"
+  success "已删除 ~/.claude.json"
 
   info "清除旧环境变量..."
   for rc_file in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zshrc"; do
@@ -283,7 +331,10 @@ install_or_skip_npm_pkg "@musistudio/claude-code-router" "claude-code-router"
 
 # 刷新 PATH
 if ! command -v claude &>/dev/null; then
-  export PATH="$(npm bin -g 2>/dev/null):$PATH"
+  NPM_GLOBAL_BIN=$(get_npm_global_bin)
+  if [ -n "$NPM_GLOBAL_BIN" ]; then
+    export PATH="${NPM_GLOBAL_BIN}:$PATH"
+  fi
 fi
 
 # ── 5. 生成 config.json ──────────────────────────────────────
@@ -307,7 +358,7 @@ if [ -f "$CONFIG_FILE" ]; then
 fi
 
 if [ "$SKIP_CONFIG" != "true" ]; then
-  DEFAULT_PROVIDER="openai,${MODEL}"
+  DEFAULT_PROVIDER="${PROVIDER_NAME},${MODEL}"
   cat > "$CONFIG_FILE" <<EOF
 {
   "LOG": false,
@@ -320,8 +371,8 @@ if [ "$SKIP_CONFIG" != "true" ]; then
   "Transformers": [],
   "Providers": [
     {
-      "name": "openai",
-      "api_base_url": "${API_BASE_URL}/v1/messages",
+      "name": "${PROVIDER_NAME}",
+      "api_base_url": "$(normalize_base_url "$API_BASE_URL")/v1/messages",
       "api_key": "${API_KEY}",
       "models": ["${MODEL}"],
       "transformer": { "use": ["Anthropic"] }
@@ -339,6 +390,8 @@ if [ "$SKIP_CONFIG" != "true" ]; then
 EOF
   chmod 600 "$CONFIG_FILE"
   success "配置文件已写入: $CONFIG_FILE"
+  GENERATED_URL=$(grep '"api_base_url"' "$CONFIG_FILE" | head -1 | grep -oE "https?://[^\"'[:space:]]+" | head -1 || true)
+  info "已读取新配置: ${GENERATED_URL}"
 fi
 
 # ── 5.5 写入环境变量到 shell RC（Linux 直接读环境变量）────────
@@ -463,7 +516,35 @@ echo "export ANTHROPIC_BASE_URL=\"${API_BASE_URL}\"" >> "$ENV_RC"
 export ANTHROPIC_API_KEY="${API_KEY}"
 export ANTHROPIC_BASE_URL="${API_BASE_URL}"
 
-success "环境变量已写入 ${ENV_RC}，并在当前会话生效"
+success "环境变量已写入 ${ENV_RC}"
+
+# 同步 Claude Code 全局 settings.json，避免 `curl | bash` 的子 shell export 无法传回父 shell
+if command -v python3 &>/dev/null; then
+  mkdir -p "$HOME/.claude"
+  python3 - "$HOME/.claude/settings.json" "$API_KEY" "$API_BASE_URL" <<'PYEOF'
+import json, os, sys
+path, api_key, base_url = sys.argv[1], sys.argv[2], sys.argv[3]
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+env = data.get('env', {})
+env['ANTHROPIC_API_KEY'] = api_key
+env['ANTHROPIC_BASE_URL'] = base_url
+env.pop('ANTHROPIC_AUTH_TOKEN', None)
+data['env'] = env
+for key in ['apiKey', 'authToken', 'sessionToken']:
+    data.pop(key, None)
+with open(path, 'w') as f:
+    json.dump(data, f, indent=2)
+PYEOF
+  success "已同步 ~/.claude/settings.json 中的 API 环境"
+else
+  warn "未检测到 python3，无法同步 ~/.claude/settings.json，直接运行 claude 前请先 source ${ENV_RC}"
+fi
 
 # ── 5.6 写入 ~/.claude.json 跳过 Onboarding 登录向导 ─────────
 step "初始化 Claude Code 状态"
@@ -511,13 +592,20 @@ fi
 # ── 6. 完成 ──────────────────────────────────────────────────
 step "完成"
 
-GLOBAL_BIN=$(npm bin -g 2>/dev/null || echo "")
+GLOBAL_BIN=$(get_npm_global_bin)
 
 echo ""
 echo -e "${GREEN}${BOLD}✅ Claude Code 部署完成！${NC}"
 echo ""
 echo -e "${CYAN}使用方法:${NC}"
-echo "  claude            # 启动 Claude Code"
+echo "  ccr code          # 推荐：通过 claude-code-router 启动 Claude Code"
+echo "  claude            # 直接启动 Claude Code"
+echo ""
+
+echo -e "${CYAN}说明:${NC}"
+echo "  curl | bash 安装无法把 export 回写到你当前父 shell。"
+echo "  已写入 ${ENV_RC}，并同步到 ~/.claude/settings.json。"
+echo "  如果直接运行 claude 仍提示未登录，请先执行: source ${ENV_RC}"
 echo ""
 
 # 检查 PATH
