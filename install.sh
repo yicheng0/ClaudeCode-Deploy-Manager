@@ -372,8 +372,7 @@ echo ""
 echo -e "${GREEN}${BOLD}✅ Claude Code 部署完成！${NC}"
 echo ""
 echo -e "${CYAN}使用方法:${NC}"
-echo "  ccr code          # 启动 Claude Code（推荐）"
-echo "  claude            # 直接运行 claude"
+echo "  claude            # 启动 Claude Code"
 echo ""
 
 # 检查 PATH
